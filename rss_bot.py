@@ -18,12 +18,11 @@ import os
 import re
 import time
 from datetime import datetime, timezone
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-from threading import Thread
 from urllib.parse import urlparse
 
 import aiohttp
+import aiohttp.web
 import feedparser
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -375,72 +374,64 @@ async def run_loop():
 # ─────────────────────────────────────────────
 #  BASIT HTTP SUNUCU (CORS başlıklı)
 # ─────────────────────────────────────────────
-class Handler(BaseHTTPRequestHandler):
-    def log_message(self, *args):
-        pass  # Sessiz log
+# ─────────────────────────────────────────────
+#  AIOHTTP WEB SUNUCU — thread yok, tek async loop
+# ─────────────────────────────────────────────
 
-    def do_GET(self):
-        path = self.path.split("?")[0]  # query string'i at
+async def handle_stories(request):
+    if OUTPUT_FILE.exists():
+        data = OUTPUT_FILE.read_bytes()
+        return aiohttp.web.Response(
+            body=data,
+            content_type="application/json",
+            charset="utf-8",
+            headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=60"}
+        )
+    return aiohttp.web.Response(
+        text=json.dumps({"status": "loading", "message": "Haberler çekiliyor, ~2 dakika bekleyin"}),
+        content_type="application/json",
+        status=503,
+        headers={"Access-Control-Allow-Origin": "*", "Retry-After": "30"}
+    )
 
-        if path == "/stories.json":
-            if OUTPUT_FILE.exists():
-                data = OUTPUT_FILE.read_bytes()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Cache-Control", "public, max-age=60")
-                self.end_headers()
-                self.wfile.write(data)
-            else:
-                # Henüz fetch tamamlanmadı
-                self.send_response(503)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Retry-After", "30")
-                self.end_headers()
-                self.wfile.write(json.dumps({
-                    "status": "loading",
-                    "message": "Haberler ilk kez çekiliyor, ~2 dakika bekleyin ve sayfayı yenileyin"
-                }).encode())
+async def handle_health(request):
+    status = "ready" if OUTPUT_FILE.exists() else "loading"
+    return aiohttp.web.Response(
+        text=json.dumps({"status": status, "service": "NewsDiscover RSS Bot", "stories_ready": OUTPUT_FILE.exists()}),
+        content_type="application/json",
+        headers={"Access-Control-Allow-Origin": "*"}
+    )
 
-        elif path in ("/", "/health"):
-            # Render health check için
-            status = "ready" if OUTPUT_FILE.exists() else "loading"
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps({
-                "status": status,
-                "service": "NewsDiscover RSS Bot",
-                "stories_ready": OUTPUT_FILE.exists(),
-                "endpoints": {
-                    "stories": "/stories.json",
-                    "health": "/health"
-                }
-            }).encode())
+async def handle_options(request):
+    return aiohttp.web.Response(
+        headers={"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS"}
+    )
 
-        else:
-            self.send_response(404)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({
-                "error": "Not found",
-                "available": ["/stories.json", "/health"]
-            }).encode())
+# ─────────────────────────────────────────────
+#  ANA DÖNGÜ — web sunucu + RSS fetch birlikte
+# ─────────────────────────────────────────────
 
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.end_headers()
+async def main():
+    # Web uygulamasını kur
+    app = aiohttp.web.Application()
+    app.router.add_get("/stories.json", handle_stories)
+    app.router.add_get("/health",       handle_health)
+    app.router.add_get("/",             handle_health)
+    app.router.add_options("/{tail:.*}", handle_options)
 
+    runner = aiohttp.web.AppRunner(app)
+    await runner.setup()
+    site = aiohttp.web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
 
-def start_server():
-    server = HTTPServer(("0.0.0.0", PORT), Handler)
-    print(f"  🌐 API: http://localhost:{PORT}/stories.json")
-    server.serve_forever()
+    print(f"  🌐 Sunucu başladı: http://0.0.0.0:{PORT}")
+    print(f"  📡 RSS çekme döngüsü başlıyor...")
 
+    # RSS döngüsü
+    while True:
+        await run_once()
+        print(f"  ⏰ Sonraki güncelleme: {FETCH_INTERVAL_MINUTES} dakika sonra")
+        await asyncio.sleep(FETCH_INTERVAL_MINUTES * 60)
 
 # ─────────────────────────────────────────────
 #  BAŞLAT
@@ -448,11 +439,6 @@ def start_server():
 if __name__ == "__main__":
     print("=" * 50)
     print("  ⚡ NewsDiscover RSS Bot")
-    print(f"  {len(FEEDS)} kaynak · her {FETCH_INTERVAL_MINUTES} dakikada güncelleme")
+    print(f"  {len(FEEDS)} kaynak · her {FETCH_INTERVAL_MINUTES}dk güncelleme · port {PORT}")
     print("=" * 50)
-
-    # HTTP sunucuyu ayrı thread'de başlat
-    Thread(target=start_server, daemon=True).start()
-
-    # RSS döngüsünü çalıştır
-    asyncio.run(run_loop())
+    asyncio.run(main())
