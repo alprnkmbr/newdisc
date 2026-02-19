@@ -1,4 +1,4 @@
-feedparser
-aiohttp
-scikit-learn
-numpy
+feedparser==6.0.11
+aiohttp==3.10.0
+scikit-learn==1.5.2
+numpy==1.26.4

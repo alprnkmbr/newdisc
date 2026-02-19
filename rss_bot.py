@@ -14,6 +14,7 @@ API: http://localhost:8000/stories.json
 import asyncio
 import hashlib
 import json
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -88,7 +89,7 @@ MAX_ARTICLES_PER_FEED  = 15    # Feed başına max makale
 MAX_STORIES            = 40    # Üretilecek max hikaye
 SIMILARITY_THRESHOLD   = 0.20  # Kümeleme hassasiyeti (düşük = daha geniş kümeler)
 OUTPUT_FILE            = Path("stories.json")
-PORT                   = 8000
+PORT                   = int(os.environ.get("PORT", 8000))  # Render PORT env var'ını kullanır
 
 # ─────────────────────────────────────────────
 #  RSS ÇEKME
