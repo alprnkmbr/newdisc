@@ -380,25 +380,59 @@ class Handler(BaseHTTPRequestHandler):
         pass  # Sessiz log
 
     def do_GET(self):
-        if self.path in ("/stories.json", "/"):
+        path = self.path.split("?")[0]  # query string'i at
+
+        if path == "/stories.json":
             if OUTPUT_FILE.exists():
                 data = OUTPUT_FILE.read_bytes()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "public, max-age=60")
                 self.end_headers()
                 self.wfile.write(data)
             else:
+                # Henüz fetch tamamlanmadı
                 self.send_response(503)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Retry-After", "30")
                 self.end_headers()
-                self.wfile.write(b'{"error": "Henuz yuklenmiyor, bekleyin..."}')
+                self.wfile.write(json.dumps({
+                    "status": "loading",
+                    "message": "Haberler ilk kez çekiliyor, ~2 dakika bekleyin ve sayfayı yenileyin"
+                }).encode())
+
+        elif path in ("/", "/health"):
+            # Render health check için
+            status = "ready" if OUTPUT_FILE.exists() else "loading"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "status": status,
+                "service": "NewsDiscover RSS Bot",
+                "stories_ready": OUTPUT_FILE.exists(),
+                "endpoints": {
+                    "stories": "/stories.json",
+                    "health": "/health"
+                }
+            }).encode())
+
         else:
             self.send_response(404)
+            self.send_header("Content-Type", "application/json")
             self.end_headers()
+            self.wfile.write(json.dumps({
+                "error": "Not found",
+                "available": ["/stories.json", "/health"]
+            }).encode())
 
     def do_OPTIONS(self):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
         self.end_headers()
 
 
